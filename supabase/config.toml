@@ -1,0 +1,7 @@
+# Минимальная конфигурация для `supabase functions deploy`.
+# Обе функции проверяют подпись сами (initData / секрет вебхука), поэтому JWT Supabase им не нужен.
+[functions.api]
+verify_jwt = false
+
+[functions.bot]
+verify_jwt = false
