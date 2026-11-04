@@ -1,18 +1,18 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { openDb, ConfigStore } from '../src/db.js';
-import { Game } from '../src/game.js';
-import { createBot } from '../src/bot.js';
+import { openSqlite, SqliteStore } from '../src/node/sqlite-store.js';
+import { Game } from '../src/server/game.js';
+import { createBot } from '../src/server/bot.js';
 
 const ADMIN = 100;
 const USER = 200;
 
 function setup() {
-  const db = openDb(':memory:');
-  const config = new ConfigStore(db);
-  const game = new Game(db, config);
+  const game = new Game(new SqliteStore(openSqlite(':memory:')));
   const env = { adminIds: [ADMIN], webAppUrl: 'https://game.example' };
-  const bot = createBot({ token: '1:TEST', env, config, game });
+  const bot = createBot({ token: '1:TEST', env, game });
+  // Снимок настроек на момент проверки
+  const config = { topic: async (t) => (await game.config.load()).topic(t), settings: async () => (await game.config.load()).settings() };
   bot.botInfo = { id: 1, is_bot: true, first_name: 'Bot', username: 'test_bot', can_join_groups: true, can_read_all_group_messages: false, supports_inline_queries: false };
   const calls = [];
   // Подменяем Telegram API: записываем вызовы и отвечаем успехом
@@ -47,9 +47,9 @@ test('обычный пользователь получает кнопку иг
   const n = calls.length;
   await send(USER, '/admin');
   assert.equal(calls.length, n, 'на /admin не-админу бот молчит');
-  const before = config.topic('addsub');
+  const before = await config.topic('addsub');
   await click(USER, 'e:addsub:1:max:10');
-  assert.deepEqual(config.topic('addsub'), before, 'чужой клик не меняет настройки');
+  assert.deepEqual(await config.topic('addsub'), before, 'чужой клик не меняет настройки');
   assert.equal(last(calls, 'answerCallbackQuery').text, 'Нет доступа');
 });
 
@@ -64,39 +64,39 @@ test('админ меняет параметры уровня кнопками',
   assert.ok(buttons(tierScreen).includes('e:addsub:1:max:10'));
 
   await click(ADMIN, 'e:addsub:1:max:10');
-  assert.equal(config.topic('addsub')[0].max, 20);
+  assert.equal((await config.topic('addsub'))[0].max, 20);
   await click(ADMIN, 'e:addsub:1:carry:t');
-  assert.equal(config.topic('addsub')[0].carry, true);
+  assert.equal((await config.topic('addsub'))[0].carry, true);
   await click(ADMIN, 'e:addsub:1:ops:c');
-  assert.equal(config.topic('addsub')[0].ops, '-');
+  assert.equal((await config.topic('addsub'))[0].ops, '-');
   await click(ADMIN, 'e:mult:2:tables:s7');
-  assert.deepEqual(config.topic('mult')[1].tables, [2, 3, 7]);
+  assert.deepEqual((await config.topic('mult'))[1].tables, [2, 3, 7]);
 
   // Граница: меньше минимума не уходит
   for (let i = 0; i < 5; i++) await click(ADMIN, 'e:addsub:1:max:-10');
-  assert.equal(config.topic('addsub')[0].max, 5);
+  assert.equal((await config.topic('addsub'))[0].max, 5);
 
   // Откат последнего изменения
-  const beforeUndo = config.topic('mult')[1].tables;
+  const beforeUndo = (await config.topic('mult'))[1].tables;
   await send(ADMIN, '/undo');
-  assert.equal(config.topic('addsub')[0].max, 10, 'откатилось последнее изменение (−10 от 15→5 обратно)');
-  assert.deepEqual(config.topic('mult')[1].tables, beforeUndo);
+  assert.equal((await config.topic('addsub'))[0].max, 10, 'откатилось последнее изменение (−10 от 15→5 обратно)');
+  assert.deepEqual((await config.topic('mult'))[1].tables, beforeUndo);
 });
 
 test('админ: уровни, классы, адаптивность, превью, статистика, экспорт', async () => {
   const { calls, send, click, config } = setup();
   await click(ADMIN, 'ta:compare');
-  assert.equal(config.topic('compare').length, 6);
+  assert.equal((await config.topic('compare')).length, 6);
   await click(ADMIN, 'td:compare');
-  assert.equal(config.topic('compare').length, 5);
+  assert.equal((await config.topic('compare')).length, 5);
 
   await click(ADMIN, 'ge:1:mult:1');
-  assert.equal(config.settings().grades[1].mult, 1);
+  assert.equal((await config.settings()).grades[1].mult, 1);
   await click(ADMIN, 'ge:1:addsub:-1');
-  assert.equal(config.settings().grades[1].addsub, 1, 'сложение нельзя выключить');
+  assert.equal((await config.settings()).grades[1].addsub, 1, 'сложение нельзя выключить');
 
   await click(ADMIN, 'ae:adaptUp:-0.05');
-  assert.equal(config.settings().adaptUp, 0.8);
+  assert.equal((await config.settings()).adaptUp, 0.8);
 
   await send(ADMIN, '/preview mult 3');
   const preview = last(calls, 'sendMessage').text;

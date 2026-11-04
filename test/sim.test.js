@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { BattleSim, PATHS, snapToLane } from '../public/shared/sim.js';
-import { CARDS, HAND_SIZE, MANA_MAX, START_BUILDINGS, annexStage, damageStage, defaultDeck, manaForAnswer, towerHeight, towerLook, wallStage } from '../public/shared/balance.js';
+import { BattleSim, PATHS, snapToLane } from '../src/core/sim.js';
+import { CARDS, HAND_SIZE, MANA_MAX, START_BUILDINGS, annexStage, damageStage, defaultDeck, manaForAnswer, towerHeight, towerLook, wallStage } from '../src/core/balance.js';
 import { playNight } from '../tools/bot.js';
 
 const make = (over = {}) => new BattleSim({ wave: 1, buildings: { ...START_BUILDINGS }, deck: defaultDeck(7), seed: 5, ...over });

@@ -1,6 +1,6 @@
 // «Ребёнок» для боя без отрисовки: отвечает за 5±2 с с заданной точностью и разумно разыгрывает карты.
-import { CARDS, rng } from '../public/shared/balance.js';
-import { BattleSim } from '../public/shared/sim.js';
+import { CARDS, rng } from '../src/core/balance.js';
+import { BattleSim } from '../src/core/sim.js';
 
 const AFTER_RIGHT = 0.25; // столько клиент показывает зелёный ответ
 const AFTER_WRONG = 1; // столько показывается правильный ответ

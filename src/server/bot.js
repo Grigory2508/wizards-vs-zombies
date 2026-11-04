@@ -1,15 +1,23 @@
+// Админ-бот: настройка сложности заданий. Работает и локально (long polling, src/node/index.js),
+// и в Supabase (вебхук, supabase/functions/bot). Настройки берутся снимком на каждое действие.
 import { Bot, InlineKeyboard, InputFile } from 'grammy';
 import {
   PARAM_SCHEMA, describeParams, generateBatch, validateParams, validateSettings,
-} from './problems.js';
-import { TOPICS, CARDS } from '../public/shared/balance.js';
+} from '../core/problems.js';
+import { TOPICS, CARDS } from '../core/balance.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]);
 const pct = (x) => `${Math.round(x * 100)}%`;
 const spellOf = (topic) => Object.values(CARDS).find((s) => s.topic === topic);
 
-export function createBot({ token, env, config, game }) {
-  const bot = new Bot(token);
+/**
+ * env: { adminIds: number[], webAppUrl: string }
+ * game: Game из ./game.js (game.config — настройки с журналом)
+ * botInfo: если известен заранее (вебхук), бот не спрашивает его у Telegram при каждом запуске
+ */
+export function createBot({ token, env, game, botInfo }) {
+  const bot = new Bot(token, botInfo ? { botInfo } : undefined);
+  const config = game.config;
   const isAdmin = (ctx) => env.adminIds.includes(ctx.from?.id);
   const adminOf = (ctx) => ({ id: ctx.from.id, name: [ctx.from.first_name, ctx.from.username && `@${ctx.from.username}`].filter(Boolean).join(' ') });
   const hasWebApp = env.webAppUrl.startsWith('https://');
@@ -46,8 +54,8 @@ export function createBot({ token, env, config, game }) {
       kb.text('« Назад', 'main');
       return { text: '📚 <b>Темы</b>\nКаждая тема — это заклинание в игре.', kb };
     },
-    topic(topic) {
-      const tiers = config.topic(topic);
+    topic(cfg, topic) {
+      const tiers = cfg.topic(topic);
       const kb = new InlineKeyboard();
       tiers.forEach((_, i) => {
         kb.text(`Уровень ${i + 1}`, `tr:${topic}:${i + 1}`);
@@ -62,8 +70,8 @@ export function createBot({ token, env, config, game }) {
         kb,
       };
     },
-    tier(topic, n) {
-      const p = config.topic(topic)[n - 1];
+    tier(cfg, topic, n) {
+      const p = cfg.topic(topic)[n - 1];
       const kb = new InlineKeyboard();
       for (const [key, def] of Object.entries(PARAM_SCHEMA[topic])) {
         const base = `e:${topic}:${n}:${key}`;
@@ -88,8 +96,8 @@ export function createBot({ token, env, config, game }) {
       kb.text('👁 Примеры заданий', `pv:${topic}:${n}`).row().text(`« ${TOPICS[topic]}`, `tp:${topic}`);
       return { text: `${spellOf(topic)?.icon ?? ''} <b>${TOPICS[topic]} — уровень ${n}</b>\n\n${describeParams(topic, p)}`, kb };
     },
-    grades() {
-      const g = config.settings().grades;
+    grades(cfg) {
+      const g = cfg.settings().grades;
       const kb = new InlineKeyboard();
       for (const n of ['1', '2', '3', '4']) kb.text(`${n} класс`, `gr:${n}`);
       kb.row().text('« Назад', 'main');
@@ -99,8 +107,8 @@ export function createBot({ token, env, config, game }) {
         kb,
       };
     },
-    grade(n) {
-      const g = config.settings().grades[n];
+    grade(cfg, n) {
+      const g = cfg.settings().grades[n];
       const kb = new InlineKeyboard();
       for (const [t, name] of Object.entries(TOPICS)) {
         kb.text(`${spellOf(t).icon} ${name}: ${g[t] || 'выкл'}`, 'noop').row();
@@ -109,8 +117,8 @@ export function createBot({ token, env, config, game }) {
       kb.text('« Классы', 'gr');
       return { text: `🎓 <b>${n} класс — стартовые уровни</b>\nДействует для новых игроков и при смене класса.`, kb };
     },
-    adapt() {
-      const s = config.settings();
+    adapt(cfg) {
+      const s = cfg.settings();
       const kb = new InlineKeyboard()
         .text(`Повышать при ≥ ${pct(s.adaptUp)}`, 'noop').row()
         .text('−5%', 'ae:adaptUp:-0.05').text('+5%', 'ae:adaptUp:0.05').row()
@@ -126,8 +134,8 @@ export function createBot({ token, env, config, game }) {
         kb,
       };
     },
-    stats() {
-      const s = game.stats();
+    async stats() {
+      const s = await game.stats();
       const ans = s.answers.length
         ? s.answers.map((a) => `${spellOf(a.topic)?.icon ?? ''} ${TOPICS[a.topic] ?? a.topic}, ур. ${a.tier}: ${a.correct}/${a.total} (${pct(a.correct / a.total)}), ~${(a.total_ms / a.total / 1000).toFixed(1)} с`).join('\n')
         : 'пока нет ответов';
@@ -139,8 +147,8 @@ export function createBot({ token, env, config, game }) {
         kb: new InlineKeyboard().text('🔄 Обновить', 'st').text('« Назад', 'main'),
       };
     },
-    log() {
-      const rows = config.log(12);
+    async log() {
+      const rows = await config.log(12);
       const text = rows.length
         ? rows.map((r) => `#${r.id} ${new Date(r.at).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' })} — ${esc(r.admin_name ?? '?')}: <code>${esc(r.key)}</code> ${esc(r.note)}`).join('\n')
         : 'Изменений пока не было.';
@@ -149,7 +157,7 @@ export function createBot({ token, env, config, game }) {
   };
 
   const show = async (ctx, screen) => {
-    const { text, kb } = screen;
+    const { text, kb } = await screen;
     const opts = { parse_mode: 'HTML', reply_markup: kb };
     if (ctx.callbackQuery) {
       try {
@@ -163,7 +171,7 @@ export function createBot({ token, env, config, game }) {
   // ---------- Команды ----------
   admin.command('admin', (ctx) => show(ctx, screens.main()));
   admin.command('topics', (ctx) => show(ctx, screens.topics()));
-  admin.command('grades', (ctx) => show(ctx, screens.grades()));
+  admin.command('grades', async (ctx) => show(ctx, screens.grades(await config.load())));
   admin.command('stats', (ctx) => show(ctx, screens.stats()));
   admin.command('log', (ctx) => show(ctx, screens.log()));
   admin.command('export', (ctx) => sendExport(ctx));
@@ -181,7 +189,7 @@ export function createBot({ token, env, config, game }) {
   );
 
   async function sendPreview(ctx, topic, n) {
-    const tiers = config.topic(topic);
+    const tiers = (await config.load()).topic(topic);
     if (n < 1 || n > tiers.length) return ctx.reply(`У темы ${n > 0 ? 'только' : ''} ${tiers.length} уровней`);
     const probs = generateBatch(topic, tiers[n - 1], 10);
     await ctx.reply(`👁 <b>${TOPICS[topic]}, уровень ${n}</b>\n\n${probs.map((p) => `<code>${esc(p.q)}</code>  → ${esc(p.answer)}   <i>(${p.options.map(esc).join(' / ')})</i>`).join('\n')}`, {
@@ -190,14 +198,14 @@ export function createBot({ token, env, config, game }) {
   }
 
   async function sendExport(ctx) {
-    const data = JSON.stringify(config.exportAll(), null, 2);
-    await ctx.replyWithDocument(new InputFile(Buffer.from(data), `difficulty-${new Date().toISOString().slice(0, 10)}.json`), {
+    const data = JSON.stringify((await config.load()).exportAll(), null, 2);
+    await ctx.replyWithDocument(new InputFile(new TextEncoder().encode(data), `difficulty-${new Date().toISOString().slice(0, 10)}.json`), {
       caption: 'Настройки сложности. Отредактируйте и пришлите файлом обратно — бот их применит.',
     });
   }
 
   async function doUndo(ctx) {
-    const last = config.undo(adminOf(ctx));
+    const last = await config.undo(adminOf(ctx));
     const msg = last ? `↩️ Отменено изменение #${last.id} (${last.key})` : 'Нечего отменять';
     if (ctx.callbackQuery) {
       await ctx.answerCallbackQuery(msg);
@@ -210,8 +218,8 @@ export function createBot({ token, env, config, game }) {
   admin.callbackQuery('noop', (ctx) => ctx.answerCallbackQuery());
   admin.callbackQuery('main', (ctx) => show(ctx, screens.main()));
   admin.callbackQuery('topics', (ctx) => show(ctx, screens.topics()));
-  admin.callbackQuery('gr', (ctx) => show(ctx, screens.grades()));
-  admin.callbackQuery('ad', (ctx) => show(ctx, screens.adapt()));
+  admin.callbackQuery('gr', async (ctx) => show(ctx, screens.grades(await config.load())));
+  admin.callbackQuery('ad', async (ctx) => show(ctx, screens.adapt(await config.load())));
   admin.callbackQuery('st', (ctx) => show(ctx, screens.stats()));
   admin.callbackQuery('lg', (ctx) => show(ctx, screens.log()));
   admin.callbackQuery('ex', async (ctx) => {
@@ -219,9 +227,9 @@ export function createBot({ token, env, config, game }) {
     await sendExport(ctx);
   });
   admin.callbackQuery('un', (ctx) => doUndo(ctx));
-  admin.callbackQuery(/^tp:(\w+)$/, (ctx) => show(ctx, screens.topic(ctx.match[1])));
-  admin.callbackQuery(/^tr:(\w+):(\d+)$/, (ctx) => show(ctx, screens.tier(ctx.match[1], Number(ctx.match[2]))));
-  admin.callbackQuery(/^gr:(\d)$/, (ctx) => show(ctx, screens.grade(ctx.match[1])));
+  admin.callbackQuery(/^tp:(\w+)$/, async (ctx) => show(ctx, screens.topic(await config.load(), ctx.match[1])));
+  admin.callbackQuery(/^tr:(\w+):(\d+)$/, async (ctx) => show(ctx, screens.tier(await config.load(), ctx.match[1], Number(ctx.match[2]))));
+  admin.callbackQuery(/^gr:(\d)$/, async (ctx) => show(ctx, screens.grade(await config.load(), ctx.match[1])));
   admin.callbackQuery(/^pv:(\w+):(\d+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     await sendPreview(ctx, ctx.match[1], Number(ctx.match[2]));
@@ -230,7 +238,7 @@ export function createBot({ token, env, config, game }) {
   // Добавить / удалить уровень темы
   admin.callbackQuery(/^t([ad]):(\w+)$/, async (ctx) => {
     const [, action, topic] = ctx.match;
-    const tiers = structuredClone(config.topic(topic));
+    const tiers = structuredClone((await config.load()).topic(topic));
     if (action === 'a') {
       if (tiers.length >= 10) return ctx.answerCallbackQuery('Максимум 10 уровней');
       tiers.push(structuredClone(tiers.at(-1)));
@@ -238,9 +246,10 @@ export function createBot({ token, env, config, game }) {
       if (tiers.length <= 1) return ctx.answerCallbackQuery('Должен остаться хотя бы 1 уровень');
       tiers.pop();
     }
-    config.set(`topic:${topic}`, tiers, adminOf(ctx), action === 'a' ? `добавлен уровень ${tiers.length}` : 'удалён последний уровень');
+    await config.set(`topic:${topic}`, tiers, adminOf(ctx), action === 'a' ? `добавлен уровень ${tiers.length}` : 'удалён последний уровень');
     await ctx.answerCallbackQuery(action === 'a' ? 'Добавлен (копия последнего) — настройте его' : 'Удалён');
-    await show(ctx, action === 'a' ? screens.tier(topic, tiers.length) : screens.topic(topic));
+    const cfg = await config.load();
+    await show(ctx, action === 'a' ? screens.tier(cfg, topic, tiers.length) : screens.topic(cfg, topic));
   });
 
   // Изменение параметра уровня
@@ -248,7 +257,7 @@ export function createBot({ token, env, config, game }) {
     const [, topic, nStr, key, op] = ctx.match;
     const n = Number(nStr);
     const def = PARAM_SCHEMA[topic]?.[key];
-    const tiers = structuredClone(config.topic(topic));
+    const tiers = structuredClone((await config.load()).topic(topic) ?? []);
     const p = tiers[n - 1];
     if (!def || !p) return ctx.answerCallbackQuery('Устаревшая кнопка');
     let v = p[key];
@@ -262,37 +271,38 @@ export function createBot({ token, env, config, game }) {
     }
     if (JSON.stringify(v) === JSON.stringify(p[key])) return ctx.answerCallbackQuery('Достигнута граница');
     tiers[n - 1] = validateParams(topic, { ...p, [key]: v });
-    config.set(`topic:${topic}`, tiers, adminOf(ctx), `ур.${n} ${key}: ${JSON.stringify(p[key])} → ${JSON.stringify(tiers[n - 1][key])}`);
+    await config.set(`topic:${topic}`, tiers, adminOf(ctx), `ур.${n} ${key}: ${JSON.stringify(p[key])} → ${JSON.stringify(tiers[n - 1][key])}`);
     await ctx.answerCallbackQuery('Сохранено');
-    await show(ctx, screens.tier(topic, n));
+    await show(ctx, screens.tier(await config.load(), topic, n));
   });
 
   // Стартовые уровни класса
   admin.callbackQuery(/^ge:(\d):(\w+):(-?\d+)$/, async (ctx) => {
     const [, g, topic, d] = ctx.match;
-    const s = structuredClone(config.settings());
-    const max = config.topic(topic).length;
+    const cfg = await config.load();
+    const s = structuredClone(cfg.settings());
+    const max = cfg.topic(topic).length;
     const min = topic === 'addsub' ? 1 : 0;
     const v = Math.min(max, Math.max(min, s.grades[g][topic] + Number(d)));
     if (v === s.grades[g][topic]) return ctx.answerCallbackQuery(`Допустимо ${min}…${max}`);
     s.grades[g][topic] = v;
-    config.set('settings', validateSettings(s), adminOf(ctx), `${g} класс ${topic} → ${v}`);
+    await config.set('settings', validateSettings(s), adminOf(ctx), `${g} класс ${topic} → ${v}`);
     await ctx.answerCallbackQuery('Сохранено');
-    await show(ctx, screens.grade(g));
+    await show(ctx, screens.grade(await config.load(), g));
   });
 
   // Адаптивность
   admin.callbackQuery(/^ae:(\w+):(-?[\d.]+)$/, async (ctx) => {
     const [, key, d] = ctx.match;
-    const s = structuredClone(config.settings());
+    const s = structuredClone((await config.load()).settings());
     const nv = Math.round((s[key] + Number(d)) * 100) / 100;
     try {
-      config.set('settings', validateSettings({ ...s, [key]: nv }), adminOf(ctx), `${key}: ${s[key]} → ${nv}`);
+      await config.set('settings', validateSettings({ ...s, [key]: nv }), adminOf(ctx), `${key}: ${s[key]} → ${nv}`);
     } catch (e) {
       return ctx.answerCallbackQuery(e.message.slice(0, 190));
     }
     await ctx.answerCallbackQuery('Сохранено');
-    await show(ctx, screens.adapt());
+    await show(ctx, screens.adapt(await config.load()));
   });
 
   // Импорт настроек из JSON-файла
@@ -313,7 +323,7 @@ export function createBot({ token, env, config, game }) {
           updates.push([key, value.map((p) => validateParams(topic, p))]);
         } else throw new Error(`Неизвестный ключ: ${key}`);
       }
-      for (const [key, value] of updates) config.set(key, value, adminOf(ctx), 'импорт из файла');
+      for (const [key, value] of updates) await config.set(key, value, adminOf(ctx), 'импорт из файла');
       await ctx.reply(`✅ Импортировано: ${updates.map(([k]) => k).join(', ')}\nОтменить: /undo (по одному ключу)`);
     } catch (e) {
       await ctx.reply(`❌ Не удалось импортировать: ${e.message}`);
@@ -322,11 +332,21 @@ export function createBot({ token, env, config, game }) {
 
   bot.on('callback_query:data', (ctx) => ctx.answerCallbackQuery('Нет доступа'));
 
-  // Меню команд и кнопка Mini App в чате
-  bot.api.setMyCommands([{ command: 'start', description: 'Начать игру' }]).catch(() => {});
+  return bot;
+}
+
+
+/**
+ * Меню команд и кнопка «Играть» в чате. Вызывается один раз: при запуске локального сервера
+ * и при выкладке в Supabase (scripts/bot-setup.mjs), а не на каждое сообщение.
+ * api — объект с методами Bot API (bot.api из grammY).
+ */
+export async function setupBot(api, env) {
+  const ok = (p) => p.catch(() => {});
+  await ok(api.setMyCommands([{ command: 'start', description: 'Начать игру' }]));
   for (const id of env.adminIds) {
-    bot.api
-      .setMyCommands(
+    await ok(
+      api.setMyCommands(
         [
           { command: 'start', description: 'Начать игру' },
           { command: 'admin', description: 'Админка сложности' },
@@ -335,10 +355,10 @@ export function createBot({ token, env, config, game }) {
           { command: 'help', description: 'Все команды' },
         ],
         { scope: { type: 'chat', chat_id: id } },
-      )
-      .catch(() => {});
+      ),
+    );
   }
-  if (hasWebApp) bot.api.setChatMenuButton({ menu_button: { type: 'web_app', text: 'Играть', web_app: { url: env.webAppUrl } } }).catch(() => {});
-
-  return bot;
+  if (env.webAppUrl.startsWith('https://')) {
+    await ok(api.setChatMenuButton({ menu_button: { type: 'web_app', text: 'Играть', web_app: { url: env.webAppUrl } } }));
+  }
 }

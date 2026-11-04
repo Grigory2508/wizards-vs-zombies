@@ -24,17 +24,16 @@ export const haptic = {
 };
 
 // ---------- API ----------
-function authHeader() {
-  if (tg?.initData) return `tma ${tg.initData}`;
-  if (params.has('dev')) return `dev ${params.get('dev') || 1}`;
-  return '';
-}
-async function api(path, body) {
-  const res = await fetch(`api/${path}`, {
-    method: body ? 'POST' : 'GET',
-    headers: { Authorization: authHeader(), ...(body ? { 'Content-Type': 'application/json' } : {}) },
-    body: body ? JSON.stringify(body) : undefined,
-  });
+// Адрес сервера задаёт config.js: локально — 'api' на этом же сервере,
+// на GitHub Pages — Supabase Edge Function (файл пишет сборка, см. .github/workflows/pages.yml).
+const CONFIG = window.WVZ_CONFIG ?? { apiUrl: 'api' };
+
+/** Команда серверу: { op, ...параметры } → ответ. Вход — по подписи Telegram (initData). */
+async function api(op, body = {}) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (tg?.initData) headers['X-Telegram-Init-Data'] = tg.initData;
+  else if (CONFIG.devMode && params.has('dev')) headers['X-Dev-User'] = params.get('dev') || '1';
+  const res = await fetch(CONFIG.apiUrl, { method: 'POST', headers, body: JSON.stringify({ ...body, op }) });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `Ошибка ${res.status}`);
   return data;
@@ -219,7 +218,7 @@ async function startBattle() {
   $('btn-battle').disabled = true;
   try {
     await loadSpritesWithin(battleArt(state.buildings), ART_WAIT_MS);
-    const data = await api('battle/start', {});
+    const data = await api('battleStart');
     show('battle');
     battle = new Battle({
       root: $('screen-battle'),
@@ -241,7 +240,7 @@ async function finishBattle(report) {
   window.__battle = null;
   let res;
   try {
-    res = await api('battle/finish', report);
+    res = await api('battleFinish', report);
   } catch (e) {
     toast(e.message);
     show('castle');

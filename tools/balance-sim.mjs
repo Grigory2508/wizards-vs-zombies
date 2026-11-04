@@ -1,12 +1,12 @@
 // Симуляция баланса без отрисовки: целые кампании «ребёнка», с покупкой улучшений и без неё.
 // Запуск: node tools/balance-sim.mjs [--runs 200] [--nights 25] [--attempts 5] [--accuracy 0.8] [--mean 5] [--json файл]
-// Логика боя та же, что в игре (public/shared/sim.js), награды считает та же формула, что и сервер.
+// Логика боя та же, что в игре (src/core/sim.js), награды считает та же формула, что и сервер.
 import { writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   BUILDINGS, START_BUILDINGS, XP_PER_CORRECT, addCardToDeck, battleGold, defaultDeck, openCards, upgradeCost, xpForLevel,
-} from '../public/shared/balance.js';
+} from '../src/core/balance.js';
 import { playNight } from './bot.js';
 
 const arg = (name, def) => {

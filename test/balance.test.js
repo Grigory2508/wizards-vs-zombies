@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { waveSummary, waveSpawns } from '../public/shared/balance.js';
+import { waveSummary, waveSpawns } from '../src/core/balance.js';
 import { table } from '../tools/balance-sim.mjs';
 
 const row = (rows, night) => rows.find((r) => r.night === night);

@@ -2,7 +2,7 @@
 // Зомби ходят по координатам из кода, поэтому нарисованные дорожки должны лечь на те же места.
 import sharp from 'sharp';
 import { mkdirSync } from 'node:fs';
-import { GATE_POS, PATHS } from '../public/shared/sim.js';
+import { GATE_POS, PATHS } from '../src/core/sim.js';
 
 const W = 720;
 const H = 1280;

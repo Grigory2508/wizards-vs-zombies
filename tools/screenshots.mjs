@@ -22,7 +22,7 @@ const VIEWPORTS = [
 
 const dbDir = mkdtempSync(join(tmpdir(), 'wvz-shots-'));
 const dbFile = join(dbDir, 'game.db');
-const server = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', 'src/index.js'], {
+const server = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', 'src/node/index.js'], {
   env: { ...process.env, PORT: String(PORT), DEV_MODE: '1', BOT_TOKEN: '', DB_FILE: dbFile },
   stdio: 'ignore',
 });
@@ -261,8 +261,11 @@ async function run(browser, vp) {
 
 /** Правит игрока прямо в базе прогона (только во временной) */
 function patchPlayer(id, fields) {
+  // Игрок хранится одним JSON-документом (players.state); меняем поля и поднимаем версию
   const db = new DatabaseSync(dbFile);
-  for (const [k, v] of Object.entries(fields)) db.prepare(`UPDATE players SET ${k} = ? WHERE tg_id = ?`).run(typeof v === 'object' ? JSON.stringify(v) : v, id);
+  const row = db.prepare('SELECT state FROM players WHERE tg_id = ?').get(id);
+  const state = { ...JSON.parse(row.state), ...fields };
+  db.prepare('UPDATE players SET state = ?, version = version + 1 WHERE tg_id = ?').run(JSON.stringify(state), id);
   db.close();
 }
 
