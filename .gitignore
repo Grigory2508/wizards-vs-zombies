@@ -1,0 +1,9 @@
+node_modules/
+data/
+.env
+.env.*
+!.env.example
+screenshots-out/
+art/raw/
+dist/
+supabase/.temp
