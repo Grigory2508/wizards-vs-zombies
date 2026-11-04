@@ -12,7 +12,10 @@
     "dev": "node --disable-warning=ExperimentalWarning --watch src/node/index.js",
     "art": "node tools/process-art.js",
     "balance": "node tools/balance-sim.mjs",
-    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.js"
+    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.js",
+    "build": "node scripts/build-pages.mjs",
+    "sync-server": "node scripts/sync-server.mjs",
+    "test:pg": "deno test -A --no-check supabase/tests/pg.test.ts"
   },
   "dependencies": {
     "@fastify/static": "^8.3.0",

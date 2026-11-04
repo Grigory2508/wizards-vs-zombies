@@ -1,0 +1,89 @@
+name: Deploy to GitHub Pages
+
+# Тесты → проверка копии ядра для сервера → сборка → публикация в ветку gh-pages.
+# Pages включается в Settings → Pages → Deploy from a branch → gh-pages (один раз, см. docs/SETUP.md).
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - name: Server code is in sync with src/core and src/server
+        run: npm run sync-server && git diff --exit-code supabase/functions/_shared
+
+  # Те же сценарии сервера, но на настоящем Postgres с миграцией из supabase/migrations
+  server-tests:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      PGPASSWORD: postgres
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+      SUPABASE_URL: http://localhost:54321
+      SUPABASE_SERVICE_ROLE_KEY: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - run: npm ci
+      - name: Database like Supabase (roles + migration)
+        run: |
+          psql -h localhost -U postgres -v ON_ERROR_STOP=1 -c "create role anon nologin; create role authenticated nologin; create role service_role nologin bypassrls;"
+          psql -h localhost -U postgres -v ON_ERROR_STOP=1 -f supabase/migrations/0001_init.sql
+      - name: Scenarios on Postgres
+        run: |
+          node supabase/tests/postgrest-lite.mjs &
+          sleep 2
+          deno test -A --no-check supabase/tests/pg.test.ts
+      - name: Type-check Edge Functions
+        run: |
+          (cd supabase/functions/api && deno check index.ts)
+          (cd supabase/functions/bot && deno check index.ts)
+
+  deploy:
+    needs: [test, server-tests]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build
+        run: node scripts/build-pages.mjs
+        env:
+          # Задаются в Settings → Secrets and variables → Actions → Variables
+          API_URL: ${{ vars.API_URL || (vars.SUPABASE_PROJECT_REF && format('https://{0}.supabase.co/functions/v1/api', vars.SUPABASE_PROJECT_REF)) || '' }}
+      - name: Publish to gh-pages
+        run: |
+          cd dist
+          git init -q -b gh-pages
+          git add -A
+          git -c user.name="github-actions" -c user.email="github-actions@users.noreply.github.com" commit -qm "deploy ${GITHUB_SHA::7}"
+          git push -qf "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" gh-pages
