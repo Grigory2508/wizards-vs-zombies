@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <title>Волшебники против Зомби</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- Загрузка -->
+    <section id="screen-loading" class="screen active">
+      <div class="loading">
+        <div class="loading-icon">🧙‍♂️</div>
+        <div class="loading-text">Колдуем…</div>
+      </div>
+    </section>
+
+    <!-- Выбор класса -->
+    <section id="screen-grade" class="screen">
+      <div class="grade-wrap">
+        <div class="grade-hero">🧙‍♂️🏰</div>
+        <h1>Волшебники<br />против Зомби</h1>
+        <p>Привет, юный волшебник! Зомби идут к твоему замку. Решай примеры, чтобы колдовать заклинания.</p>
+        <p class="grade-q">В каком ты классе?</p>
+        <div class="grade-buttons">
+          <button data-grade="1">1</button>
+          <button data-grade="2">2</button>
+          <button data-grade="3">3</button>
+          <button data-grade="4">4</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Замок -->
+    <section id="screen-castle" class="screen">
+      <header class="topbar">
+        <div class="wizard">
+          <div class="wizard-avatar">🧙‍♂️<span class="wizard-level" id="wiz-level">1</span></div>
+          <div class="wizard-info">
+            <div class="wizard-name" id="wiz-name">Волшебник</div>
+            <div class="xpbar"><div class="xpbar-fill" id="xp-fill"></div></div>
+            <div class="xp-text" id="xp-text">0 / 40 опыта</div>
+          </div>
+        </div>
+        <div class="gold"><span id="gold-icon">🪙</span><b id="gold">0</b></div>
+      </header>
+
+      <div class="castle-scroll">
+        <div class="castle-hero" id="castle-hero">
+          <div class="sky"><span class="moon">🌕</span><span class="star s1">✦</span><span class="star s2">✦</span><span class="star s3">✧</span></div>
+          <canvas class="castle-view" id="castle-view"></canvas>
+          <div class="best-night" id="best-night"></div>
+          <div class="night-info">
+            <div class="night-title">Ночь <b id="night-num">1</b></div>
+            <div class="night-enemies" id="night-enemies"></div>
+          </div>
+          <button class="btn-battle" id="btn-battle">⚔️ В бой!</button>
+        </div>
+
+        <h2>Постройки</h2>
+        <div class="cards" id="buildings"></div>
+
+        <h2>Колода <small id="deck-count"></small></h2>
+        <div class="deck-slots" id="deck-slots"></div>
+        <div class="deck-hint" id="deck-hint"></div>
+        <div class="cards" id="spells"></div>
+
+        <div class="footer-line">
+          <span id="grade-label">1 класс</span> · <button class="link" id="btn-change-grade">сменить класс</button>
+          · <button class="link" id="btn-sound">звук вкл</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Бой -->
+    <section id="screen-battle" class="screen">
+      <div id="stage-host">
+        <!-- Логический экран 720×1280: целиком вписывается в окно -->
+        <div id="stage">
+          <canvas id="field"></canvas>
+          <div class="hud">
+            <div class="hud-wave" id="hud-wave">Ночь 1</div>
+            <div class="hud-left" id="hud-left"></div>
+            <div class="combo" id="combo"></div>
+            <button class="hud-flee" id="btn-flee" title="Отступить">🏳️</button>
+          </div>
+          <div class="quiz" id="quiz">
+            <div class="quiz-q" id="quiz-q">2 + 2 = ?</div>
+            <div class="quiz-options" id="quiz-options"></div>
+          </div>
+          <div class="mana">
+            <span class="mana-icon" id="mana-icon"></span>
+            <div class="mana-bar" id="mana-bar"></div>
+            <b class="mana-num" id="mana-num">0</b>
+            <span class="mana-gain" id="mana-gain"></span>
+          </div>
+          <div class="hand-row">
+            <div class="hand" id="hand"></div>
+            <div class="next-card" id="next-card"></div>
+          </div>
+          <div class="card-ghost" id="card-ghost" hidden></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Итоги боя -->
+    <div class="modal" id="result" hidden>
+      <div class="modal-card">
+        <div class="result-icon" id="result-icon">🏆</div>
+        <h2 id="result-title">Победа!</h2>
+        <div class="result-rows" id="result-rows"></div>
+        <button class="btn-primary" id="result-ok">В замок</button>
+      </div>
+    </div>
+
+    <div class="toast" id="toast" hidden></div>
+  </div>
+  <script src="config.js"></script>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
