@@ -19,8 +19,8 @@ jobs:
     env:
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
       PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
-      # Адрес игры на GitHub Pages: https://<владелец>.github.io/<репозиторий>/
-      WEBAPP_URL: ${{ vars.WEBAPP_URL || format('https://{0}.github.io/{1}/', github.repository_owner, github.event.repository.name) }}
+      # Адрес игры на GitHub Pages задаётся в шаге «Game address» (https://<владелец>.github.io/<репозиторий>/)
+      WEBAPP_URL_VAR: ${{ vars.WEBAPP_URL }}
     steps:
       - name: Check configuration
         id: cfg
@@ -38,6 +38,14 @@ jobs:
           else
             echo "ready=true" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Game address
+        if: steps.cfg.outputs.ready == 'true'
+        run: |
+          # Домен GitHub Pages — в нижнем регистре
+          url="${WEBAPP_URL_VAR:-https://${GITHUB_REPOSITORY_OWNER,,}.github.io/${GITHUB_REPOSITORY#*/}/}"
+          echo "WEBAPP_URL=$url" >> "$GITHUB_ENV"
+          echo "Адрес игры: $url"
 
       - uses: actions/checkout@v4
         if: steps.cfg.outputs.ready == 'true'
