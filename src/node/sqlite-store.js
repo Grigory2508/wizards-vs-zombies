@@ -41,6 +41,15 @@ export function openSqlite(file) {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       admin_id INTEGER, admin_name TEXT, key TEXT NOT NULL, before TEXT, after TEXT, note TEXT, at INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS classes (
+      code TEXT PRIMARY KEY,
+      owner INTEGER NOT NULL,
+      data TEXT NOT NULL,
+      version INTEGER NOT NULL DEFAULT 1,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS classes_owner ON classes (owner);
     CREATE TABLE IF NOT EXISTS answer_stats (
       topic TEXT NOT NULL, tier INTEGER NOT NULL,
       total INTEGER NOT NULL DEFAULT 0, correct INTEGER NOT NULL DEFAULT 0, total_ms INTEGER NOT NULL DEFAULT 0,
@@ -118,6 +127,61 @@ export class SqliteStore {
     const answers = this.db.prepare('SELECT topic, tier, total, correct, total_ms FROM answer_stats ORDER BY topic, tier').all();
     const grades = this.db.prepare("SELECT json_extract(state,'$.grade') grade, COUNT(*) n FROM players GROUP BY 1 ORDER BY 1").all();
     return { players, active, battles, answers, grades };
+  }
+
+  // ---------- Классы ----------
+  async getClass(code) {
+    const r = this.db.prepare('SELECT owner, data, version FROM classes WHERE code = ?').get(code);
+    return r ? { owner: r.owner, data: parse(r.data), version: r.version } : null;
+  }
+  async insertClass(code, owner, data) {
+    const now = Date.now();
+    const r = this.db.prepare('INSERT OR IGNORE INTO classes (code, owner, data, version, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?)').run(code, owner, JSON.stringify(data), now, now);
+    return r.changes > 0;
+  }
+  async updateClass(code, data, version) {
+    const r = this.db.prepare('UPDATE classes SET data = ?, version = version + 1, updated_at = ? WHERE code = ? AND version = ?').run(JSON.stringify(data), Date.now(), code, version);
+    return r.changes > 0;
+  }
+  async classesByOwner(owner) {
+    return this.db
+      .prepare("SELECT c.code, c.data, (SELECT COUNT(*) FROM players p WHERE json_extract(p.state, '$.classCode') = c.code) students FROM classes c WHERE c.owner = ? ORDER BY c.created_at")
+      .all(owner)
+      .map((r) => ({ code: r.code, data: parse(r.data), students: r.students }));
+  }
+  async classStudents(code) {
+    return this.db
+      .prepare("SELECT tg_id, state, updated_at FROM players WHERE json_extract(state, '$.classCode') = ?")
+      .all(code)
+      .map((r) => ({ tgId: r.tg_id, state: parse(r.state), updatedAt: new Date(r.updated_at).toISOString() }));
+  }
+
+  // ---------- Рейтинг ----------
+  async leaderboard({ period, week, classCode, limit, me }) {
+    const [best, correct] = period === 'week' ? ['$.week.best', '$.week.correct'] : ['$.bestWave', '$.totalCorrect'];
+    const where = ['(best > 0 OR correct > 0)'];
+    const args = [];
+    if (period === 'week') {
+      where.push("json_extract(state, '$.week.id') = ?");
+      args.push(week);
+    }
+    if (classCode) {
+      where.push("json_extract(state, '$.classCode') = ?");
+      args.push(classCode);
+    }
+    const ranked = `
+      WITH t AS (
+        SELECT tg_id, json_extract(state, '$.name') name,
+               COALESCE(json_extract(state, '${best}'), 0) best, COALESCE(json_extract(state, '${correct}'), 0) correct, state
+        FROM players
+      ), r AS (
+        SELECT tg_id, name, best, correct, ROW_NUMBER() OVER (ORDER BY best DESC, correct DESC, tg_id) rank
+        FROM t WHERE ${where.join(' AND ')}
+      )`;
+    const rows = this.db.prepare(`${ranked} SELECT * FROM r ORDER BY rank LIMIT ?`).all(...args, limit);
+    const mine = this.db.prepare(`${ranked} SELECT * FROM r WHERE tg_id = ?`).get(...args, me);
+    const shape = (r) => ({ rank: r.rank, name: r.name, best: r.best, correct: r.correct, me: r.tg_id === me });
+    return { rows: rows.map(shape), me: mine ? shape(mine) : null };
   }
 
   // ---------- Настройки и журнал ----------

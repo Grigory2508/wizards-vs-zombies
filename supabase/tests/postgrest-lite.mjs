@@ -48,7 +48,7 @@ async function handle(method, path, params, body, prefer) {
     if (table === 'rpc') {
       const keys = Object.keys(body);
       const sql = `select public.${ident(fn)}(${keys.map((k, i) => `${ident(k)} => $${i + 1}`).join(', ')}) as v`;
-      const r = await client.query(sql, keys.map((k) => (typeof body[k] === 'object' ? JSON.stringify(body[k]) : body[k])));
+      const r = await client.query(sql, keys.map((k) => (body[k] !== null && typeof body[k] === 'object' ? JSON.stringify(body[k]) : body[k])));
       out = r.rows[0].v;
     } else {
       const cols = await columns(client, table);
@@ -95,7 +95,7 @@ http
     req.on('end', async () => {
       const url = new URL(req.url, 'http://x');
       if (url.pathname === '/__reset') {
-        await pool.query('truncate public.players, public.battles, public.config, public.config_log, public.answer_stats restart identity');
+        await pool.query('truncate public.players, public.battles, public.config, public.config_log, public.answer_stats, public.classes restart identity');
         res.end('ok');
         return;
       }

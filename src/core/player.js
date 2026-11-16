@@ -10,8 +10,10 @@ import {
   defaultDeck, isValidDeck, addCardToDeck, openCards,
 } from './balance.js';
 import { generateBatch } from './problems.js';
+import { GameError } from './errors.js';
+import { CUSTOM_SHARE, customProblems } from './classroom.js';
 
-export class GameError extends Error {}
+export { GameError };
 
 export const PLAYER_VERSION = 1;
 
@@ -29,6 +31,9 @@ export function newPlayer(user) {
     buildings: { ...START_BUILDINGS },
     skills: {},
     deck: defaultDeck(START_BUILDINGS.library),
+    totalCorrect: 0,
+    week: null, // { id: '2026-W47', best, correct } — для еженедельного рейтинга
+    classCode: null,
   });
 }
 
@@ -50,6 +55,9 @@ export function migratePlayer(raw) {
   delete p.best_wave;
   p.buildings = { ...START_BUILDINGS, ...(p.buildings ?? {}) };
   p.skills ??= {};
+  p.totalCorrect ??= 0;
+  p.week ??= null;
+  p.classCode ??= null;
   // Колода без повторов и только из открытых карт (старые колоды из 8 огненных шаров заменяются)
   if (!isValidDeck(p.deck, p.buildings.library)) p.deck = defaultDeck(p.buildings.library);
   return p;
@@ -71,6 +79,7 @@ export function publicState(p) {
     upgradeCosts: Object.fromEntries(Object.keys(BUILDINGS).map((k) => [k, p.buildings[k] >= BUILDINGS[k].maxLevel ? null : upgradeCost(k, p.buildings[k])])),
     skills: Object.fromEntries(Object.entries(p.skills).map(([t, s]) => [t, s.tier])),
     nextWave: waveSummary(p.wave),
+    totalCorrect: p.totalCorrect,
   };
 }
 
@@ -105,15 +114,23 @@ export function setDeck(p, deck) {
   return p;
 }
 
-/** Текущий тир темы для игрока (0 — тема выключена для его класса) */
-export function tierFor(p, cfg, topic) {
+/**
+ * Текущий тир темы для игрока (0 — тема выключена для его года обучения).
+ * cls — класс ученика: учитель может закрепить уровень темы, тогда он не подстраивается.
+ */
+export function tierFor(p, cfg, topic, cls = null) {
   const tiers = cfg.topic(topic);
+  const fixed = cls?.fixedTiers?.[topic];
+  if (fixed) return Math.min(Math.max(1, fixed), tiers.length);
   const t = p.skills[topic]?.tier ?? cfg.settings().grades[p.grade || 1][topic] ?? 1;
   return t === 0 ? 0 : Math.min(Math.max(1, t), tiers.length);
 }
 
-/** Задания на бой: по темам карт колоды. Сервер сохраняет их вместе с правильными ответами. */
-export function buildBattle(p, cfg, seed) {
+/**
+ * Задания на бой: по темам карт колоды, плюс задания учителя, если ученик в классе.
+ * Сервер сохраняет их вместе с правильными ответами.
+ */
+export function buildBattle(p, cfg, seed, cls = null) {
   if (!p.grade) throw new GameError('Сначала выбери класс');
   const settings = cfg.settings();
   const problems = {};
@@ -122,12 +139,19 @@ export function buildBattle(p, cfg, seed) {
     const slot = CARDS[key].topic;
     if (problems[slot]) continue;
     let topic = slot;
-    if (tierFor(p, cfg, topic) === 0) topic = 'addsub'; // тема выключена для класса — запасная
-    const tier = tierFor(p, cfg, topic);
-    tiers[slot] = { topic, tier };
+    if (tierFor(p, cfg, topic, cls) === 0) topic = 'addsub'; // тема выключена для года обучения — запасная
+    const tier = tierFor(p, cfg, topic, cls);
+    tiers[slot] = { topic, tier, ...(cls?.fixedTiers?.[topic] ? { fixed: true } : {}) };
     problems[slot] = generateBatch(topic, cfg.topic(topic)[tier - 1], settings.problemsPerTopic);
   }
-  return { wave: p.wave, problems, tiers, deck: [...p.deck], seed };
+  const custom = customProblems(cls, settings.problemsPerTopic);
+  let customShare = 0;
+  if (custom.length) {
+    problems.custom = custom;
+    tiers.custom = { topic: 'custom', tier: 0 };
+    customShare = CUSTOM_SHARE[cls.customShare];
+  }
+  return { wave: p.wave, problems, tiers, deck: [...p.deck], seed, customShare };
 }
 
 /**
@@ -144,6 +168,7 @@ export function judgeBattle(battle, report) {
   let manaEarned = 0;
   const seen = new Set(); // один и тот же ответ дважды не считается
   const perTopic = {};
+  const taskResults = {}; // по заданиям учителя: { id: {total, correct} }
   const answers = Array.isArray(report.answers) ? report.answers.slice(0, 1000) : [];
   for (const a of answers) {
     const list = problems[a?.slot];
@@ -162,9 +187,14 @@ export function judgeBattle(battle, report) {
     } else {
       streak = 0;
     }
-    const { topic, tier } = tiers[a.slot];
-    (perTopic[topic] ??= { tier, results: [], ms: 0 }).results.push(ok);
+    const { topic, tier, fixed } = tiers[a.slot];
+    (perTopic[topic] ??= { tier, fixed: Boolean(fixed), results: [], ms: 0 }).results.push(ok);
     perTopic[topic].ms += ms;
+    if (prob.id !== undefined) {
+      const r = (taskResults[prob.id] ??= { total: 0, correct: 0 });
+      r.total++;
+      if (ok) r.correct++;
+    }
   }
 
   // Сыгранные карты: только из колоды этого боя и не дороже маны, заработанной верными ответами
@@ -194,11 +224,14 @@ export function judgeBattle(battle, report) {
   const lost = [...new Set((Array.isArray(report.lost) ? report.lost : []).filter((b) => ['castle', 'towerL', 'towerR'].includes(b)))];
   const towersSaved = 2 - lost.filter((b) => b !== 'castle').length;
 
-  return { wave: battle.wave, victory, forged, killed: forged ? {} : killed, kills, towersSaved, lost, correct, total, perTopic, manaEarned, manaSpent, cardsPlayed: plays.length };
+  return { wave: battle.wave, victory, forged, killed: forged ? {} : killed, kills, towersSaved, lost, correct, total, perTopic, taskResults, manaEarned, manaSpent, cardsPlayed: plays.length };
 }
 
-/** Применяет итог боя к игроку: золото, опыт, следующая ночь, адаптивная сложность */
-export function applyBattle(p, cfg, judged) {
+/**
+ * Применяет итог боя к игроку: золото, опыт, следующая ночь, рейтинг, адаптивная сложность.
+ * week — текущая неделя (weekId из classroom.js), время приходит снаружи.
+ */
+export function applyBattle(p, cfg, judged, week) {
   const settings = cfg.settings();
   const goldBonus = BUILDINGS.treasury.effect(p.buildings.treasury).goldBonus;
   const { gold, towerGold } = battleGold({ kills: judged.killed, victory: judged.victory, wave: judged.wave, towersSaved: judged.towersSaved, goldBonus });
@@ -216,8 +249,18 @@ export function applyBattle(p, cfg, judged) {
     if (p.wave === judged.wave) p.wave++;
   }
 
+  // Рейтинг: за всё время и за эту неделю (неделя сменилась — начинаем заново)
+  p.totalCorrect += judged.correct;
+  if (week) {
+    if (p.week?.id !== week) p.week = { id: week, best: 0, correct: 0 };
+    p.week.correct += judged.correct;
+    if (judged.victory) p.week.best = Math.max(p.week.best, judged.wave);
+  }
+
   const tierChanges = {};
   for (const [topic, d] of Object.entries(judged.perTopic)) {
+    // Задания учителя и закреплённые учителем уровни не подстраиваются
+    if (topic === 'custom' || d.fixed) continue;
     const skill = (p.skills[topic] ??= { tier: d.tier, recent: [] });
     if (skill.tier === 0) continue;
     skill.recent = [...skill.recent, ...d.results].slice(-settings.adaptWindow);
@@ -244,7 +287,7 @@ export function applyBattle(p, cfg, judged) {
 
 /** Статистика ответов по темам из итога боя: [{topic, tier, total, correct, ms}] */
 export function answerStats(judged) {
-  return Object.entries(judged.perTopic).map(([topic, d]) => ({
+  return Object.entries(judged.perTopic).filter(([topic]) => topic !== 'custom').map(([topic, d]) => ({
     topic, tier: d.tier, total: d.results.length, correct: d.results.filter(Boolean).length, ms: Math.round(d.ms),
   }));
 }

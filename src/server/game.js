@@ -17,10 +17,21 @@
 //   logList(limit) → [{ id, admin_name, key, note, at }]
 //   logLastUndoable() → { id, key, before } | null
 //   logMarkUndone(id)
-import { DEFAULT_SETTINGS, DEFAULT_TOPICS } from '../core/problems.js';
+//   — классы и рейтинг —
+//   getClass(code) → { owner, data, version } | null
+//   insertClass(code, owner, data) → boolean       (false — такой код уже занят)
+//   updateClass(code, data, version) → boolean
+//   classesByOwner(owner) → [{ code, data, students }]
+//   classStudents(code) → [{ tgId, state, updatedAt }]
+//   leaderboard({ period: 'week'|'all', week, classCode, limit, me }) → { rows: [{ rank, name, best, correct, me }], me: {...} | null }
+import { DEFAULT_SETTINGS, DEFAULT_TOPICS, generateBatch } from '../core/problems.js';
+import { TOPICS } from '../core/balance.js';
 import {
   GameError, applyBattle, answerStats, buildBattle, judgeBattle, migratePlayer, newPlayer, publicState, setDeck, setGrade, upgrade,
 } from '../core/player.js';
+import {
+  CODE_ALPHABET, LIMITS, addTask, addTaskResults, classForStudent, classForTeacher, editTask, newClass, ratingOf, removeTask, updateClass, weekId,
+} from '../core/classroom.js';
 
 export { GameError };
 
@@ -64,6 +75,14 @@ export class Config {
   }
 }
 
+function newCode() {
+  const b = new Uint8Array(8);
+  crypto.getRandomValues(b);
+  return Array.from(b, (x) => CODE_ALPHABET[x % CODE_ALPHABET.length]).join('');
+}
+
+const cleanCode = (code) => String(code ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 16);
+
 function randomSeed() {
   const b = new Uint32Array(1);
   crypto.getRandomValues(b);
@@ -96,26 +115,37 @@ export class Game {
     throw new GameError('Игра открыта в другом окне — обновите страницу');
   }
 
+  /** Состояние для клиента: игрок + его класс */
+  async view(p) {
+    const row = p.classCode ? await this.store.getClass(p.classCode) : null;
+    return { ...publicState(p), class: classForStudent(p.classCode, row?.data) };
+  }
+
   async state(user) {
-    return publicState((await this.load(user)).p);
+    const { p } = await this.load(user);
+    // Имя в Telegram могли поменять — обновим, чтобы в рейтинге было актуальное
+    const name = String(user.first_name ?? '').trim().slice(0, 40);
+    if (name && name !== p.name) return this.view((await this.mutate(user, (pl) => (pl.name = name))).p);
+    return this.view(p);
   }
 
   async setGrade(user, grade) {
-    return publicState((await this.mutate(user, (p, cfg) => setGrade(p, cfg, grade))).p);
+    return this.view((await this.mutate(user, (p, cfg) => setGrade(p, cfg, grade))).p);
   }
 
   async upgrade(user, key) {
-    return publicState((await this.mutate(user, (p) => upgrade(p, key))).p);
+    return this.view((await this.mutate(user, (p) => upgrade(p, key))).p);
   }
 
   async setDeck(user, deck) {
-    return publicState((await this.mutate(user, (p) => setDeck(p, deck))).p);
+    return this.view((await this.mutate(user, (p) => setDeck(p, deck))).p);
   }
 
   async startBattle(user) {
     const cfg = await this.config.load();
     const { p } = await this.load(user);
-    const battle = buildBattle(p, cfg, randomSeed());
+    const cls = p.classCode ? (await this.store.getClass(p.classCode))?.data : null;
+    const battle = buildBattle(p, cfg, randomSeed(), cls);
     // Незавершённые бои игрока закрываем (например, закрыл приложение посреди боя)
     await this.store.abandonBattles(user.id);
     const id = await this.store.insertBattle(user.id, battle);
@@ -130,10 +160,145 @@ export class Game {
     if (battle === 'finished') throw new GameError('Бой уже завершён');
     if (!battle) throw new GameError('Бой не найден');
     const judged = judgeBattle(battle, report ?? {});
-    const { p, out: result } = await this.mutate(user, (pl, cfg) => applyBattle(pl, cfg, judged));
+    const week = weekId(Date.now());
+    const { p, out: result } = await this.mutate(user, (pl, cfg) => applyBattle(pl, cfg, judged, week));
     await this.store.setBattleResult(battleId, result);
     await this.store.addAnswerStats(answerStats(judged));
-    return { result, state: publicState(p) };
+    // Статистика по заданиям учителя — в его класс
+    if (p.classCode && Object.keys(judged.taskResults).length) {
+      await this.mutateClass(p.classCode, (cls) => addTaskResults(cls, judged.taskResults)).catch(() => {});
+    }
+    return { result, state: await this.view(p) };
+  }
+
+  // ---------- Рейтинг ----------
+  /** period: 'week' | 'all'; scope: 'all' | 'class' */
+  async leaderboard(user, { period, scope }) {
+    const { p } = await this.load(user);
+    const week = weekId(Date.now());
+    const classCode = scope === 'class' ? p.classCode : null;
+    if (scope === 'class' && !classCode) return { rows: [], me: null, week, noClass: true };
+    const board = await this.store.leaderboard({ period: period === 'week' ? 'week' : 'all', week, classCode, limit: 50, me: user.id });
+    return { ...board, week, mine: ratingOf(p, week) };
+  }
+
+  // ---------- Классы: ученик ----------
+  async classInfo(code) {
+    const c = cleanCode(code);
+    const row = c ? await this.store.getClass(c) : null;
+    if (!row) throw new GameError('Класс не найден — попросите у учителя новую ссылку');
+    return classForStudent(c, row.data);
+  }
+
+  async joinClass(user, code) {
+    const c = cleanCode(code);
+    const row = c ? await this.store.getClass(c) : null;
+    if (!row) throw new GameError('Класс не найден — попросите у учителя новую ссылку');
+    const { p } = await this.mutate(user, (pl, cfg) => {
+      pl.classCode = c;
+      // Год обучения класса — новичкам, кто его ещё не выбрал
+      if (!pl.grade && row.data.grade) setGrade(pl, cfg, row.data.grade);
+    });
+    return this.view(p);
+  }
+
+  async leaveClass(user) {
+    return this.view((await this.mutate(user, (p) => (p.classCode = null))).p);
+  }
+
+  // ---------- Классы: учитель ----------
+  async mutateClass(code, fn) {
+    for (let i = 0; i < RETRIES; i++) {
+      const row = await this.store.getClass(code);
+      if (!row) throw new GameError('Класс не найден');
+      const data = structuredClone(row.data);
+      const out = fn(data, row);
+      if (await this.store.updateClass(code, data, row.version)) return { data, out };
+    }
+    throw new GameError('Класс изменили в другом окне — обновите страницу');
+  }
+
+  /** Класс, которым владеет пользователь; иначе ошибка */
+  async ownClass(user, code) {
+    const c = cleanCode(code);
+    const row = c ? await this.store.getClass(c) : null;
+    if (!row || Number(row.owner) !== Number(user.id)) throw new GameError('Это не ваш класс');
+    return c;
+  }
+
+  async teacherClasses(user) {
+    const list = await this.store.classesByOwner(user.id);
+    return list.map((r) => ({ code: r.code, name: r.data.name, students: Number(r.students) || 0, tasks: r.data.tasks.length }));
+  }
+
+  async createClass(user, { name, grade }) {
+    const mine = await this.store.classesByOwner(user.id);
+    if (mine.length >= LIMITS.classesPerTeacher) throw new GameError(`Не больше ${LIMITS.classesPerTeacher} классов`);
+    const data = newClass({ name, grade, ownerName: user.first_name });
+    for (let i = 0; i < RETRIES; i++) {
+      const code = newCode();
+      if (await this.store.insertClass(code, user.id, data)) return this.classDetail(user, code);
+    }
+    throw new Error('Не удалось создать класс');
+  }
+
+  /** Всё о классе для страницы учителя: настройки, задания, ученики, примеры уровней сложности */
+  async classDetail(user, code) {
+    const c = await this.ownClass(user, code);
+    const row = await this.store.getClass(c);
+    const cfg = await this.config.load();
+    const week = weekId(Date.now());
+    const students = (await this.store.classStudents(c))
+      .map(({ tgId, state, updatedAt }) => {
+        const p = migratePlayer(state);
+        const r = ratingOf(p, week);
+        return {
+          id: Number(tgId), name: p.name, grade: p.grade, level: p.level,
+          bestWave: r.allBest, weekBest: r.weekBest, totalCorrect: r.allCorrect, weekCorrect: r.weekCorrect,
+          tiers: Object.fromEntries(Object.entries(p.skills).map(([t, sk]) => [t, sk.tier])),
+          lastPlayed: updatedAt,
+        };
+      })
+      .sort((a, b) => b.bestWave - a.bestWave || b.totalCorrect - a.totalCorrect);
+    // Чтобы учитель видел, что значит «уровень 3»: по три примера на каждый уровень темы
+    const levels = Object.fromEntries(Object.keys(TOPICS).map((t) => [t, cfg.topic(t).map((params) => generateBatch(t, params, 3).map((x) => x.q))]));
+    return { ...classForTeacher(c, row.data), students, levels, topics: TOPICS };
+  }
+
+  async classUpdate(user, code, patch) {
+    const c = await this.ownClass(user, code);
+    await this.mutateClass(c, (cls) => updateClass(cls, patch ?? {}));
+    return this.classDetail(user, c);
+  }
+
+  async taskAdd(user, code, task) {
+    const c = await this.ownClass(user, code);
+    await this.mutateClass(c, (cls) => addTask(cls, task));
+    return this.classDetail(user, c);
+  }
+
+  async taskEdit(user, code, id, task) {
+    const c = await this.ownClass(user, code);
+    await this.mutateClass(c, (cls) => editTask(cls, id, task));
+    return this.classDetail(user, c);
+  }
+
+  async taskRemove(user, code, id) {
+    const c = await this.ownClass(user, code);
+    await this.mutateClass(c, (cls) => removeTask(cls, id));
+    return this.classDetail(user, c);
+  }
+
+  /** Убрать ученика из класса (например, чужой зашёл по пересланной ссылке) */
+  async removeStudent(user, code, studentId) {
+    const c = await this.ownClass(user, code);
+    const sid = Number(studentId);
+    if (!Number.isInteger(sid) || !(await this.store.getPlayer(sid))) throw new GameError('Этого ученика нет в классе');
+    await this.mutate({ id: sid }, (p) => {
+      if (p.classCode !== c) throw new GameError('Этого ученика нет в классе');
+      p.classCode = null;
+    });
+    return this.classDetail(user, c);
   }
 
   stats() {
@@ -156,6 +321,30 @@ export async function handleOp(game, user, body) {
       return game.startBattle(user);
     case 'battleFinish':
       return game.finishBattle(user, body);
+    case 'leaderboard':
+      return game.leaderboard(user, { period: body.period, scope: body.scope });
+    case 'classInfo':
+      return game.classInfo(body.code);
+    case 'joinClass':
+      return game.joinClass(user, body.code);
+    case 'leaveClass':
+      return game.leaveClass(user);
+    case 'teacherClasses':
+      return game.teacherClasses(user);
+    case 'createClass':
+      return game.createClass(user, { name: body.name, grade: body.grade });
+    case 'classDetail':
+      return game.classDetail(user, body.code);
+    case 'classUpdate':
+      return game.classUpdate(user, body.code, body.patch);
+    case 'taskAdd':
+      return game.taskAdd(user, body.code, body.task);
+    case 'taskEdit':
+      return game.taskEdit(user, body.code, body.id, body.task);
+    case 'taskRemove':
+      return game.taskRemove(user, body.code, body.id);
+    case 'removeStudent':
+      return game.removeStudent(user, body.code, body.studentId);
     default:
       throw new GameError('Неизвестная команда');
   }

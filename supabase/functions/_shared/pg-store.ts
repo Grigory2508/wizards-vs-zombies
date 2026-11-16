@@ -52,6 +52,34 @@ export class PgStore {
     return rpc<Json>('admin_stats');
   }
 
+  // ---------- Классы ----------
+  async getClass(code: string) {
+    const rows = await select<{ owner: number; data: Json; version: number }>('classes', `code=eq.${encodeURIComponent(code)}&select=owner,data,version`);
+    return rows[0] ?? null;
+  }
+
+  async insertClass(code: string, owner: number, data: Json) {
+    return (await insertIgnore('classes', { code, owner, data, version: 1 })).length > 0;
+  }
+
+  async updateClass(code: string, data: Json, version: number) {
+    const rows = await update('classes', `code=eq.${encodeURIComponent(code)}&version=eq.${id(version)}`, { data, version: version + 1, updated_at: now() });
+    return rows.length > 0;
+  }
+
+  classesByOwner(owner: number) {
+    return rpc<{ code: string; data: Json; students: number }[]>('teacher_classes', { p_owner: owner });
+  }
+
+  classStudents(code: string) {
+    return rpc<{ tgId: number; state: Json; updatedAt: string }[]>('class_students', { p_code: code });
+  }
+
+  // ---------- Рейтинг ----------
+  leaderboard(q: { period: string; week: string; classCode: string | null; limit: number; me: number }) {
+    return rpc<Json>('leaderboard', { p_period: q.period, p_week: q.week, p_class: q.classCode, p_limit: q.limit, p_me: q.me });
+  }
+
   // ---------- Настройки и журнал ----------
   async configAll() {
     const rows = await select<{ key: string; value: unknown }>('config', 'select=key,value');

@@ -60,7 +60,7 @@ export const DEFAULT_SETTINGS = {
 
 const ri = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
 const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
-const shuffle = (arr) => {
+export const shuffle = (arr) => {
   for (let i = arr.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     [arr[i], arr[j]] = [arr[j], arr[i]];
@@ -69,7 +69,7 @@ const shuffle = (arr) => {
 };
 
 /** Варианты ответа: правильный + 3 правдоподобных неправильных */
-function numericOptions(answer, spread = 3) {
+export function numericOptions(answer, spread = 3) {
   const opts = new Set([answer]);
   const candidates = [answer + 1, answer - 1, answer + 10, answer - 10, answer + 2, answer - 2];
   for (const c of shuffle(candidates)) {
