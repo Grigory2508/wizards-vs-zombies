@@ -170,8 +170,13 @@ export class Battle {
   }
 
   // ---------- Примеры ----------
-  /** Тема выбирается по картам в руке: чем больше карт темы, тем чаще её примеры */
+  /**
+   * Тема выбирается по картам в руке: чем больше карт темы, тем чаще её примеры.
+   * Если ученик в классе, вместо обычного примера с заданной учителем частотой попадается его задание.
+   */
   pickTopic() {
+    const share = this.data.customShare || 0;
+    if (this.data.problems.custom?.length && Math.random() < share) return 'custom';
     const hand = this.sim.hand;
     const pick = hand[Math.floor(Math.random() * hand.length)];
     return CARDS[pick].topic;
@@ -188,13 +193,16 @@ export class Battle {
     const { ui } = this;
     ui.q.textContent = p.q;
     ui.q.classList.remove('wrong-answer');
+    // Текстовая задача учителя длиннее примера — мельче шрифт и перенос строк
+    ui.q.classList.toggle('long', p.q.length > 22);
+    ui.q.classList.toggle('longer', p.q.length > 70);
     ui.options.classList.toggle('three', p.options.length === 3);
     this.optionButtons.forEach((b, idx) => {
       const text = p.options[idx];
       b.hidden = text === undefined;
       b.textContent = text ?? '';
       b.dataset.value = text ?? '';
-      b.className = '';
+      b.className = text && text.length > 4 ? 'long' : ''; // словесный ответ учителя — мельче
     });
   }
 
@@ -215,7 +223,8 @@ export class Battle {
       btn.classList.add('wrong');
       this.haptic.err();
       this.optionButtons.find((b) => b.dataset.value === c.p.answer)?.classList.add('right');
-      this.ui.q.textContent = c.p.q.replace('?', c.p.answer);
+      // В примере знак «?» заменяем ответом, у текстовой задачи — дописываем ответ
+      this.ui.q.textContent = c.topic === 'custom' ? `${c.p.q} — ${c.p.answer}` : c.p.q.replace('?', c.p.answer);
       this.ui.q.classList.add('wrong-answer');
       this.later(() => this.nextProblem(), AFTER_WRONG_MS);
     }

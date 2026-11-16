@@ -13,6 +13,10 @@ for (const f of readdirSync('src/core')) if (f.endsWith('.js') && !f.endsWith('.
 
 const apiUrl = process.env.API_URL || '';
 if (!apiUrl) console.warn('::warning::API_URL не задан — сайт соберётся, но игра не сможет обратиться к серверу');
-writeFileSync(`${out}/config.js`, `window.WVZ_CONFIG = ${JSON.stringify({ apiUrl, devMode: false })};\n`);
+// Имя бота и короткое имя Mini App — для ссылок-приглашений в класс (t.me/<бот>/<app>?startapp=c_<код>)
+const botUsername = (process.env.BOT_USERNAME || '').replace(/^@/, '');
+const appShortName = process.env.APP_SHORTNAME || 'play';
+if (!botUsername) console.warn('::warning::BOT_USERNAME не задан — учитель увидит код класса, но не ссылку-приглашение');
+writeFileSync(`${out}/config.js`, `window.WVZ_CONFIG = ${JSON.stringify({ apiUrl, botUsername, appShortName, devMode: false })};\n`);
 writeFileSync(`${out}/.nojekyll`, '');
 console.log(`dist готов, API: ${apiUrl || '(не задан)'}`);

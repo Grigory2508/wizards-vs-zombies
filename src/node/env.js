@@ -6,6 +6,8 @@ export const env = {
   botToken: process.env.BOT_TOKEN || '',
   adminIds: list(process.env.ADMIN_IDS),
   webAppUrl: process.env.WEBAPP_URL || '',
+  botUsername: (process.env.BOT_USERNAME || '').replace(/^@/, ''),
+  appShortName: process.env.APP_SHORTNAME || 'play',
   port: Number(process.env.PORT || 3000),
   host: process.env.HOST || '0.0.0.0',
   dbFile: process.env.DB_FILE || './data/game.db',

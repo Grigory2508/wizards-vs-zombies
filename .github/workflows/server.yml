@@ -101,4 +101,8 @@ jobs:
           # А проверка базы — 200: значит, таблицы созданы (SQL из supabase/migrations выполнен)
           code=$(curl -s -o /tmp/ping.json -w '%{http_code}' -X POST "$api" -H 'Content-Type: application/json' -d '{"op":"ping"}')
           cat /tmp/ping.json; echo
-          [ "$code" = "200" ] || { echo "::error::База не отвечает ($code). Выполните supabase/migrations/0001_init.sql в SQL Editor (docs/SETUP.md, шаг 2)"; exit 1; }
+          if [ "$code" != "200" ]; then
+            missing=$(sed -n 's/.*"missing":"\([^"]*\)".*/\1/p' /tmp/ping.json)
+            echo "::error::База не готова ($code). Выполните в Supabase → SQL Editor файл supabase/migrations/${missing:-0001_init.sql} (docs/SETUP.md, шаг 2.2) и запустите Deploy server снова"
+            exit 1
+          fi

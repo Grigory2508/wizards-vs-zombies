@@ -56,7 +56,7 @@ jobs:
       - name: Database like Supabase (roles + migration)
         run: |
           psql -h localhost -U postgres -v ON_ERROR_STOP=1 -c "create role anon nologin; create role authenticated nologin; create role service_role nologin bypassrls;"
-          psql -h localhost -U postgres -v ON_ERROR_STOP=1 -f supabase/migrations/0001_init.sql
+          for f in supabase/migrations/*.sql; do psql -h localhost -U postgres -v ON_ERROR_STOP=1 -q -f "$f"; done
       - name: Scenarios on Postgres
         run: |
           node supabase/tests/postgrest-lite.mjs &
@@ -80,6 +80,8 @@ jobs:
         env:
           # Задаются в Settings → Secrets and variables → Actions → Variables
           API_URL: ${{ vars.API_URL || (vars.SUPABASE_PROJECT_REF && format('https://{0}.supabase.co/functions/v1/api', vars.SUPABASE_PROJECT_REF)) || '' }}
+          BOT_USERNAME: ${{ vars.BOT_USERNAME }}
+          APP_SHORTNAME: ${{ vars.APP_SHORTNAME || 'play' }}
       - name: Publish to gh-pages
         run: |
           cd dist

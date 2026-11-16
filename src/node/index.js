@@ -30,7 +30,7 @@ await app.register(fastifyStatic, {
 });
 // Настройки клиента: локально API на этом же сервере
 app.get('/config.js', (req, reply) => {
-  reply.type('text/javascript').header('Cache-Control', 'no-cache').send(`window.WVZ_CONFIG = ${JSON.stringify({ apiUrl: 'api', devMode: env.devMode })};`);
+  reply.type('text/javascript').header('Cache-Control', 'no-cache').send(`window.WVZ_CONFIG = ${JSON.stringify({ apiUrl: 'api', devMode: env.devMode, botUsername: env.botUsername, appShortName: env.appShortName })};`);
 });
 
 app.post('/api', async (req, reply) => {

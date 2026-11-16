@@ -4,9 +4,9 @@ import { battleArt, homeArt, iconHtml, artUrl, loadSprites, loadSpritesWithin, n
 import { isMuted, setMuted, unlockAudio, sfx } from './audio.js';
 import { CastleView } from './castle-view.js';
 
-const tg = window.Telegram?.WebApp;
-const $ = (id) => document.getElementById(id);
-const params = new URLSearchParams(location.search);
+import { tg, $, params, haptic, api, show, toast, el, esc, ask, startClassCode } from './ui.js';
+import { openRating } from './rating.js';
+import { openTeacher } from './teacher.js';
 
 // ---------- Telegram ----------
 if (tg) {
@@ -17,46 +17,6 @@ if (tg) {
   tg.setHeaderColor?.('#1f1840');
   tg.setBackgroundColor?.('#15102b');
 }
-export const haptic = {
-  tap: () => tg?.HapticFeedback?.impactOccurred('light'),
-  ok: () => tg?.HapticFeedback?.notificationOccurred('success'),
-  err: () => tg?.HapticFeedback?.notificationOccurred('error'),
-};
-
-// ---------- API ----------
-// Адрес сервера задаёт config.js: локально — 'api' на этом же сервере,
-// на GitHub Pages — Supabase Edge Function (файл пишет сборка, см. .github/workflows/pages.yml).
-const CONFIG = window.WVZ_CONFIG ?? { apiUrl: 'api' };
-
-/** Команда серверу: { op, ...параметры } → ответ. Вход — по подписи Telegram (initData). */
-async function api(op, body = {}) {
-  const headers = { 'Content-Type': 'application/json' };
-  if (tg?.initData) headers['X-Telegram-Init-Data'] = tg.initData;
-  else if (CONFIG.devMode && params.has('dev')) headers['X-Dev-User'] = params.get('dev') || '1';
-  const res = await fetch(CONFIG.apiUrl, { method: 'POST', headers, body: JSON.stringify({ ...body, op }) });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `Ошибка ${res.status}`);
-  return data;
-}
-
-// ---------- UI-утилиты ----------
-function show(screen) {
-  document.querySelectorAll('.screen').forEach((s) => s.classList.toggle('active', s.id === `screen-${screen}`));
-}
-let toastTimer;
-function toast(text) {
-  const t = $('toast');
-  t.textContent = text;
-  t.hidden = false;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => (t.hidden = true), 2500);
-}
-const el = (html) => {
-  const t = document.createElement('template');
-  t.innerHTML = html.trim();
-  return t.content.firstElementChild;
-};
-
 // ---------- Состояние ----------
 let state = null;
 
@@ -79,7 +39,10 @@ function renderCastle() {
   $('best-night').textContent = `Лучшая ночь: ${s.bestWave || '—'}`;
   $('night-enemies').textContent =
     'Придут: ' + Object.entries(s.nextWave).map(([t, n]) => `${ZOMBIES[t].icon}×${n}`).join('  ') + (s.nextWave.boss ? ' — БОСС!' : '');
-  $('grade-label').textContent = `${s.grade} класс`;
+  $('grade-label').textContent = `Задания для ${s.grade} класса`;
+  $('myclass-label').innerHTML = s.class
+    ? `${esc(s.class.name)}<small>учитель: ${esc(s.class.teacher)}</small>`
+    : 'Мой класс<small>вступить по коду</small>';
   castleView.show(s.buildings);
 
   const bWrap = $('buildings');
@@ -298,10 +261,103 @@ $('btn-change-grade').onclick = () => {
 };
 $('btn-battle').onclick = startBattle;
 
+// ---------- Рейтинг, классы, учитель ----------
+const backToCastle = async () => {
+  try {
+    state = await api('state'); // класс мог поменяться (учитель убрал, переименовал)
+  } catch {
+    // покажем то, что есть
+  }
+  show('castle');
+  renderCastle();
+};
+
+$('btn-rating').onclick = () => {
+  haptic.tap();
+  openRating({ back: backToCastle, scope: 'all' });
+};
+$('btn-teacher').onclick = () => {
+  haptic.tap();
+  openTeacher({ back: backToCastle });
+};
+$('btn-myclass').onclick = async () => {
+  haptic.tap();
+  if (!state.class) {
+    openCodeModal();
+    return;
+  }
+  const choice = await chooseClassAction();
+  if (choice === 'rating') openRating({ back: backToCastle, scope: 'class' });
+  if (choice === 'leave' && (await ask(`Выйти из класса ${state.class.name}? Прогресс в игре сохранится.`))) {
+    try {
+      state = await api('leaveClass');
+      renderCastle();
+      toast('Ты вышел из класса');
+    } catch (e) {
+      toast(e.message);
+    }
+  }
+};
+
+/** Что сделать со своим классом: окно Telegram с кнопками, вне Telegram — по очереди спрашиваем */
+function chooseClassAction() {
+  const c = state.class;
+  return new Promise((resolve) => {
+    if (tg?.showPopup && tg.initData) {
+      tg.showPopup(
+        {
+          title: c.name.slice(0, 60),
+          message: `Учитель: ${c.teacher}`,
+          buttons: [{ id: 'rating', type: 'default', text: 'Рейтинг класса' }, { id: 'leave', type: 'destructive', text: 'Выйти из класса' }, { type: 'cancel' }],
+        },
+        (id) => resolve(id || null),
+      );
+    } else resolve(confirm(`${c.name} (учитель: ${c.teacher}).\nОткрыть рейтинг класса? («Отмена» — выйти из класса)`) ? 'rating' : 'leave');
+  });
+}
+
+function openCodeModal() {
+  const form = $('code-form');
+  form.reset();
+  $('code-modal').hidden = false;
+  form.code.focus();
+}
+$('code-cancel').onclick = () => ($('code-modal').hidden = true);
+$('code-form').onsubmit = async (e) => {
+  e.preventDefault();
+  const code = String(new FormData(e.target).get('code') || '').trim();
+  if (await joinByCode(code)) $('code-modal').hidden = true;
+};
+
+/** Вступить в класс: показываем, что это за класс, и спрашиваем подтверждение */
+async function joinByCode(code) {
+  try {
+    const info = await api('classInfo', { code });
+    if (state.class?.code === info.code) {
+      toast(`Ты уже в классе ${info.name}`);
+      return true;
+    }
+    const moving = state.class ? `\nСейчас ты в классе ${state.class.name} — перейдёшь в новый.` : '';
+    if (!(await ask(`Вступить в класс ${info.name}? Учитель: ${info.teacher}.${moving}`))) return false;
+    state = await api('joinClass', { code: info.code });
+    haptic.ok();
+    toast(`Ты в классе ${info.name}!`);
+    if (state.grade) renderCastle();
+    return true;
+  } catch (e) {
+    haptic.err();
+    toast(e.message);
+    return false;
+  }
+}
+
 // ---------- Старт ----------
 (async () => {
   try {
     state = await api('state');
+    // Открыли по ссылке-приглашению учителя — предложим вступить в класс
+    const invite = startClassCode();
+    if (invite && state.class?.code !== invite) await joinByCode(invite);
     await loadSprites(homeArt(state.buildings));
     if (!state.grade) show('grade');
     else {

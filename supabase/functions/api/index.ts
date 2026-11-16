@@ -23,9 +23,22 @@ Deno.serve(async (req) => {
   if (req.method !== 'POST') return json({ error: 'POST only' }, 405);
 
   const body = await req.json().catch(() => ({}));
-  // Проверка, что сервер и база живы (её же дёргает keepalive, чтобы бесплатный проект Supabase не засыпал)
+  // Проверка, что сервер и база живы (её же дёргает keepalive, чтобы бесплатный проект Supabase не засыпал).
+  // Заодно видно, выполнены ли все SQL-файлы из supabase/migrations.
   if (body?.op === 'ping') {
-    await game.config.load();
+    try {
+      await game.config.load();
+    } catch (e) {
+      console.error(e);
+      return json({ ok: false, missing: '0001_init.sql' }, 500);
+    }
+    try {
+      await game.store.classesByOwner(0);
+      await game.store.leaderboard({ period: 'all', week: '', classCode: null, limit: 1, me: 0 });
+    } catch (e) {
+      console.error(e);
+      return json({ ok: false, missing: '0002_classes_leaderboard.sql' }, 500);
+    }
     return json({ ok: true });
   }
 
